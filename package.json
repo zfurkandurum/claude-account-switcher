@@ -1,0 +1,99 @@
+{
+  "name": "claude-account-switcher",
+  "displayName": "Claude Account Switcher",
+  "description": "Switch the Claude Code extension between multiple Claude subscription accounts and Anthropic API keys with one key. macOS.",
+  "version": "0.2.0",
+  "publisher": "zfurkandurum",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeSwitcher.switch",
+        "title": "Switch Profile",
+        "category": "Claude Switcher"
+      },
+      {
+        "command": "claudeSwitcher.toggle",
+        "title": "Toggle Default / Last Used Profile",
+        "category": "Claude Switcher"
+      },
+      {
+        "command": "claudeSwitcher.addSubscription",
+        "title": "Add Subscription Account",
+        "category": "Claude Switcher"
+      },
+      {
+        "command": "claudeSwitcher.addApiKey",
+        "title": "Add API Key Profile",
+        "category": "Claude Switcher"
+      },
+      {
+        "command": "claudeSwitcher.relogin",
+        "title": "Sign In Again to a Subscription Account",
+        "category": "Claude Switcher"
+      },
+      {
+        "command": "claudeSwitcher.remove",
+        "title": "Remove Profile",
+        "category": "Claude Switcher"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "claudeSwitcher.toggle",
+        "key": "cmd+alt+k",
+        "mac": "cmd+alt+k"
+      }
+    ],
+    "configuration": {
+      "title": "Claude Account Switcher",
+      "properties": {
+        "claudeSwitcher.reloadOnSwitch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Reload the window after switching so every Claude Code session picks up the new identity."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "bun build src/extension.ts --outfile dist/extension.js --target node --format cjs --external vscode",
+    "package": "bun run build && bunx @vscode/vsce package --no-dependencies --skip-license",
+    "install-ext": "bun run package && code --install-extension \"claude-account-switcher-$(node -p \"require('./package.json').version\").vsix\" --force",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test src && bash tests/wrapper.test.sh"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.6.0"
+  },
+  "icon": "resources/icon.png",
+  "homepage": "https://github.com/zfurkandurum/claude-account-switcher#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zfurkandurum/claude-account-switcher.git"
+  },
+  "bugs": {
+    "url": "https://github.com/zfurkandurum/claude-account-switcher/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude code",
+    "anthropic",
+    "account switcher",
+    "api key",
+    "profiles"
+  ]
+}
