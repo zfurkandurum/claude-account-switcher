@@ -28,8 +28,12 @@ Or from source: `bun install && bun run install-ext`. Then reload VS Code.
 | Toggle Default / Last Used Profile | Same as `Cmd+Alt+K` |
 | Add Subscription Account | Opens `claude auth login` for a new account in a terminal; sign in in the browser |
 | Add API Key Profile | Saves a key to the Keychain |
+| Update API Key | Replace the key stored for an API profile |
+| Rename Profile | Change the name shown for a profile (its folder and Keychain entry keep the original name) |
 | Sign In Again to a Subscription Account | Refresh an expired login |
 | Remove Profile | Signs out / deletes the key and local data for that profile |
+
+You can also manage profiles straight from the picker (status bar item or *Switch Profile*): every row has buttons to sign in again or update the key, rename and remove it. Subscription accounts that are signed out are flagged with a warning; select one to sign in again.
 
 Switching reloads the window so every Claude Code chat restarts with the new identity (turn this off with `claudeSwitcher.reloadOnSwitch`; then only new chats use it).
 

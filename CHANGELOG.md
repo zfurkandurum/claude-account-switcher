@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Profile picker rows now have buttons to sign in again / update the API key, rename and remove (removal was only reachable from the Command Palette before).
+- `Update API Key` and `Rename Profile` commands. Adding an API key under an existing name now asks before replacing it.
+- Subscription accounts that are signed out are flagged in the picker and the status bar.
 - Chat history (`projects/`, `file-history/`) is now shared across profiles, so a conversation can be resumed after switching account or key. Existing per-profile history is merged into `~/.claude` on first launch.
 
 ## 0.2.0

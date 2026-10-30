@@ -1,18 +1,20 @@
 import * as fs from "fs";
 import * as vscode from "vscode";
-import { authStatus, findClaudeBinary, logout } from "./claudeCli";
+import { AuthStatus, authStatus, findClaudeBinary, logout } from "./claudeCli";
 import { NAME_RE, deleteKey, saveKey } from "./keychain";
 import {
   MAX,
   Profile,
   accountDir,
-  apiConfigDir,
+  deleteProfileDir,
+  displayName,
   getActive,
   getLastNonDefault,
   idOf,
   listProfiles,
   parseId,
   removeProfile,
+  setLabel,
   upsertProfile,
 } from "./profiles";
 import { applyProfile, ensureWrapper } from "./switch";
@@ -22,6 +24,8 @@ const COMMANDS = [
   "toggle",
   "addSubscription",
   "addApiKey",
+  "updateApiKey",
+  "rename",
   "relogin",
   "remove",
 ].map((c) => `claudeSwitcher.${c}`);
@@ -31,11 +35,32 @@ const activeId = () => {
   return p.kind === "max" ? MAX : idOf(p as Profile);
 };
 
+const labelOf = (p: Profile) => (p.kind === "sub" ? `$(account) ${displayName(p)}` : `$(key) API · ${displayName(p)}`);
+
 function validName(v: string): string | undefined {
   if (!NAME_RE.test(v)) return "Use letters, digits, . _ - (max 40, must start with a letter or digit)";
   if (v === MAX) return "Reserved name";
   return undefined;
 }
+
+const validLabel = (p: Profile) => (v: string) => {
+  const t = v.trim();
+  if (!t) return "The name can't be empty";
+  if (t.length > 40) return "Max 40 characters";
+  if (listProfiles().some((x) => x.kind === p.kind && idOf(x) !== idOf(p) && displayName(x) === t)) {
+    return "Another profile already uses this name";
+  }
+  return undefined;
+};
+
+const BTN = {
+  login: { iconPath: new vscode.ThemeIcon("refresh"), tooltip: "Sign in again" },
+  key: { iconPath: new vscode.ThemeIcon("key"), tooltip: "Update API key" },
+  rename: { iconPath: new vscode.ThemeIcon("edit"), tooltip: "Rename" },
+  remove: { iconPath: new vscode.ThemeIcon("trash"), tooltip: "Remove" },
+} satisfies Record<string, vscode.QuickInputButton>;
+
+type PickItem = vscode.QuickPickItem & { id: string; profile?: Profile };
 
 export async function activate(ctx: vscode.ExtensionContext) {
   if (process.platform !== "darwin") {
@@ -49,18 +74,31 @@ export async function activate(ctx: vscode.ExtensionContext) {
     return;
   }
 
+  // Last known sign-in state of each subscription account (by name) for this session.
+  const authCache = new Map<string, AuthStatus>();
+
   const bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   bar.command = "claudeSwitcher.switch";
   ctx.subscriptions.push(bar);
 
   const refresh = () => {
     const p = parseId(getActive());
-    bar.text =
-      p.kind === "max"
-        ? "$(account) Claude: Default"
+    if (p.kind === "max") {
+      bar.text = "$(account) Claude: Default";
+    } else {
+      const shown = displayName(listProfiles().find((x) => idOf(x) === idOf(p as Profile)) ?? (p as Profile));
+      const signedOut = p.kind === "sub" && authCache.get(p.name)?.loggedIn === false;
+      bar.text = signedOut
+        ? `$(warning) Claude: ${shown}`
         : p.kind === "sub"
-          ? `$(account) Claude: ${p.name}`
-          : `$(key) Claude: API · ${p.name}`;
+          ? `$(account) Claude: ${shown}`
+          : `$(key) Claude: API · ${shown}`;
+      if (signedOut) {
+        bar.tooltip = "Signed out. Click to switch profile or sign in again.";
+        bar.show();
+        return;
+      }
+    }
     bar.tooltip = "Click to switch Claude profile (Cmd+Alt+K toggles Default ⇄ last used)";
     bar.show();
   };
@@ -72,11 +110,28 @@ export async function activate(ctx: vscode.ExtensionContext) {
     vscode.window.showErrorMessage(`Claude Switcher setup failed: ${(e as Error).message}`);
   }
 
+  const findBin = () => findClaudeBinary(vscode.extensions.getExtension("anthropic.claude-code")?.extensionPath);
   const claudeBin = () => {
-    const bin = findClaudeBinary(vscode.extensions.getExtension("anthropic.claude-code")?.extensionPath);
+    const bin = findBin();
     if (!bin) vscode.window.showErrorMessage("Could not find the Claude Code binary. Is the Claude Code extension installed?");
     return bin;
   };
+
+  // Reads the account's sign-in state and keeps the stored email fresh.
+  const checkAuth = async (bin: string, name: string) => {
+    const st = await authStatus(bin, accountDir(name));
+    authCache.set(name, st);
+    const stored = listProfiles().find((x) => x.kind === "sub" && x.name === name);
+    if (stored && st.loggedIn && st.email && stored.email !== st.email) upsertProfile({ kind: "sub", name, email: st.email });
+    refresh();
+    return st;
+  };
+
+  const active = parseId(getActive());
+  if (active.kind === "sub") {
+    const bin = findBin();
+    if (bin) void checkAuth(bin, active.name);
+  }
 
   const switchTo = async (id: string) => {
     if (id === activeId()) return;
@@ -103,6 +158,8 @@ export async function activate(ctx: vscode.ExtensionContext) {
       if (t !== term) return;
       sub.dispose();
       const st = await authStatus(bin, cfgDir);
+      authCache.set(name, st);
+      refresh();
       if (!st.loggedIn) {
         vscode.window.showWarningMessage(`Login for "${name}" did not complete.`);
         return;
@@ -115,26 +172,180 @@ export async function activate(ctx: vscode.ExtensionContext) {
     ctx.subscriptions.push(sub);
   };
 
-  ctx.subscriptions.push(
-    vscode.commands.registerCommand("claudeSwitcher.switch", async () => {
-      const active = activeId();
-      const mark = (id: string) => (active === id ? "active" : "");
-      const items: (vscode.QuickPickItem & { id: string })[] = [
+  const promptKey = (name: string) =>
+    vscode.window.showInputBox({
+      prompt: `Anthropic API key for "${name}"`,
+      placeHolder: "sk-ant-…",
+      password: true,
+      validateInput: (v) => (/^[A-Za-z0-9._-]{20,}$/.test(v) ? undefined : "That doesn't look like an API key"),
+    });
+
+  const updateKeyFlow = async (p: Profile) => {
+    const key = await promptKey(displayName(p));
+    if (!key) return;
+    try {
+      await saveKey(p.name, key);
+    } catch (e) {
+      vscode.window.showErrorMessage(`Could not save key: ${(e as Error).message}`);
+      return;
+    }
+    if (activeId() === idOf(p)) {
+      // Running sessions keep the old key until the window reloads.
+      const go = await vscode.window.showInformationMessage(`API key "${displayName(p)}" updated.`, "Reload now");
+      if (go) await vscode.commands.executeCommand("workbench.action.reloadWindow");
+    } else {
+      vscode.window.showInformationMessage(`API key "${displayName(p)}" updated.`);
+    }
+  };
+
+  const renameFlow = async (p: Profile) => {
+    const value = await vscode.window.showInputBox({
+      prompt: `New name for "${displayName(p)}"`,
+      value: displayName(p),
+      validateInput: validLabel(p),
+    });
+    if (value === undefined) return;
+    const label = value.trim();
+    setLabel(p, label === p.name ? undefined : label);
+    refresh();
+  };
+
+  const removeFlow = async (p: Profile) => {
+    const isActive = activeId() === idOf(p);
+    const what = p.kind === "sub" ? "sign out and delete its local data" : "delete its key from the Keychain";
+    const note = isActive ? " It is the active profile, so the window will switch to the default login and reload." : "";
+    const ok = await vscode.window.showWarningMessage(
+      `Remove "${displayName(p)}"? This will ${what}.${note}`,
+      { modal: true },
+      "Remove"
+    );
+    if (!ok) return;
+    if (p.kind === "api") {
+      await deleteKey(p.name);
+    } else {
+      const bin = findBin();
+      if (bin) await logout(bin, accountDir(p.name));
+      authCache.delete(p.name);
+    }
+    deleteProfileDir(p);
+    removeProfile(p);
+    if (isActive) await applyProfile(ctx, MAX);
+    refresh();
+  };
+
+  const pickProfile = async (placeHolder: string, kind?: Profile["kind"]) => {
+    const all = listProfiles().filter((p) => !kind || p.kind === kind);
+    if (!all.length) {
+      vscode.window.showInformationMessage(kind === "api" ? "No API keys saved." : kind === "sub" ? "No subscription accounts saved." : "No profiles saved.");
+      return undefined;
+    }
+    const pick = await vscode.window.showQuickPick(
+      all.map((p) => ({ label: labelOf(p), description: p.email, p })),
+      { placeHolder }
+    );
+    return pick?.p;
+  };
+
+  const choose = async (it: PickItem) => {
+    if (it.id === "__sub") return vscode.commands.executeCommand("claudeSwitcher.addSubscription");
+    if (it.id === "__api") return vscode.commands.executeCommand("claudeSwitcher.addApiKey");
+    const p = it.profile;
+    if (p?.kind === "sub" && authCache.get(p.name)?.loggedIn === false) return loginAccount(p.name, true);
+    return switchTo(it.id);
+  };
+
+  // Row buttons run their action once the picker has closed, then the picker reopens
+  // so the change is visible (except sign-in, where the terminal needs the focus).
+  const showPicker = async (): Promise<void> => {
+    const qp = vscode.window.createQuickPick<PickItem>();
+    qp.placeholder = "Switch Claude profile";
+    let disposed = false;
+    let action: (() => Promise<unknown>) | undefined;
+    let reopen = false;
+
+    const build = (): PickItem[] => {
+      const cur = activeId();
+      const mark = (id: string) => (cur === id ? "active" : "");
+      return [
         { id: MAX, label: "$(account) Default login", description: mark(MAX), detail: "Your existing Claude login in ~/.claude" },
-        ...listProfiles().map((p) => ({
-          id: idOf(p),
-          label: p.kind === "sub" ? `$(account) ${p.name}` : `$(key) API · ${p.name}`,
-          description: [mark(idOf(p)), p.kind === "sub" ? p.email : ""].filter(Boolean).join(" · "),
-        })),
+        ...listProfiles().map((p): PickItem => {
+          const signedOut = p.kind === "sub" && authCache.get(p.name)?.loggedIn === false;
+          return {
+            id: idOf(p),
+            profile: p,
+            label: labelOf(p),
+            description: [
+              mark(idOf(p)),
+              p.kind === "sub" ? p.email : "",
+              signedOut ? "$(warning) signed out · select to sign in" : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            buttons: p.kind === "sub" ? [BTN.login, BTN.rename, BTN.remove] : [BTN.key, BTN.rename, BTN.remove],
+          };
+        }),
         { id: "__sub", label: "$(add) Add subscription account…" },
         { id: "__api", label: "$(add) Add API key…" },
       ];
-      const pick = await vscode.window.showQuickPick(items, { placeHolder: "Switch Claude profile" });
-      if (!pick) return;
-      if (pick.id === "__sub") await vscode.commands.executeCommand("claudeSwitcher.addSubscription");
-      else if (pick.id === "__api") await vscode.commands.executeCommand("claudeSwitcher.addApiKey");
-      else await switchTo(pick.id);
-    }),
+    };
+    const setItems = () => {
+      const keep = qp.activeItems[0]?.id;
+      qp.items = build();
+      const again = qp.items.find((i) => i.id === keep);
+      if (again) qp.activeItems = [again];
+    };
+    setItems();
+
+    // Accounts already known to be signed in are not re-checked in this session.
+    const bin = findBin();
+    const toCheck = bin ? listProfiles().filter((p) => p.kind === "sub" && !authCache.get(p.name)?.loggedIn) : [];
+    if (bin && toCheck.length) {
+      let left = toCheck.length;
+      qp.busy = true;
+      for (const p of toCheck) {
+        void checkAuth(bin, p.name).then(() => {
+          if (disposed) return;
+          if (--left === 0) qp.busy = false;
+          setItems();
+        });
+      }
+    }
+
+    qp.onDidAccept(() => {
+      const it = qp.selectedItems[0];
+      if (!it) return;
+      action = () => choose(it);
+      qp.hide();
+    });
+    qp.onDidTriggerItemButton((e) => {
+      const p = e.item.profile;
+      if (!p) return;
+      reopen = e.button !== BTN.login;
+      action =
+        e.button === BTN.login
+          ? () => loginAccount(p.name, false)
+          : e.button === BTN.key
+            ? () => updateKeyFlow(p)
+            : e.button === BTN.rename
+              ? () => renameFlow(p)
+              : () => removeFlow(p);
+      qp.hide();
+    });
+    const hidden = new Promise<void>((resolve) =>
+      qp.onDidHide(() => {
+        disposed = true;
+        qp.dispose();
+        resolve();
+      })
+    );
+    qp.show();
+    await hidden;
+    if (action) await action();
+    if (reopen) await showPicker();
+  };
+
+  ctx.subscriptions.push(
+    vscode.commands.registerCommand("claudeSwitcher.switch", showPicker),
 
     vscode.commands.registerCommand("claudeSwitcher.toggle", async () => {
       if (activeId() !== MAX) return switchTo(MAX);
@@ -164,12 +375,17 @@ export async function activate(ctx: vscode.ExtensionContext) {
         validateInput: validName,
       });
       if (!name) return;
-      const key = await vscode.window.showInputBox({
-        prompt: `Anthropic API key for "${name}"`,
-        placeHolder: "sk-ant-…",
-        password: true,
-        validateInput: (v) => (/^[A-Za-z0-9._-]{20,}$/.test(v) ? undefined : "That doesn't look like an API key"),
-      });
+      const existing = listProfiles().find((p) => p.kind === "api" && p.name === name);
+      if (existing) {
+        const ok = await vscode.window.showWarningMessage(
+          `An API key named "${name}" already exists. Replace its key?`,
+          { modal: true },
+          "Replace"
+        );
+        if (ok) await updateKeyFlow(existing);
+        return;
+      }
+      const key = await promptKey(name);
       if (!key) return;
       try {
         await saveKey(name, key);
@@ -183,44 +399,24 @@ export async function activate(ctx: vscode.ExtensionContext) {
       else refresh();
     }),
 
+    vscode.commands.registerCommand("claudeSwitcher.updateApiKey", async () => {
+      const p = await pickProfile("Update the key of which profile?", "api");
+      if (p) await updateKeyFlow(p);
+    }),
+
+    vscode.commands.registerCommand("claudeSwitcher.rename", async () => {
+      const p = await pickProfile("Rename which profile?");
+      if (p) await renameFlow(p);
+    }),
+
     vscode.commands.registerCommand("claudeSwitcher.relogin", async () => {
-      const subs = listProfiles().filter((p) => p.kind === "sub");
-      if (!subs.length) return vscode.window.showInformationMessage("No subscription accounts saved.");
-      const pick = await vscode.window.showQuickPick(
-        subs.map((p) => ({ label: p.name, description: p.email })),
-        { placeHolder: "Sign in again to which account?" }
-      );
-      if (pick) await loginAccount(pick.label, false);
+      const p = await pickProfile("Sign in again to which account?", "sub");
+      if (p) await loginAccount(p.name, false);
     }),
 
     vscode.commands.registerCommand("claudeSwitcher.remove", async () => {
-      const all = listProfiles();
-      if (!all.length) return vscode.window.showInformationMessage("No profiles saved.");
-      const pick = await vscode.window.showQuickPick(
-        all.map((p) => ({
-          label: p.kind === "sub" ? `$(account) ${p.name}` : `$(key) API · ${p.name}`,
-          description: p.email,
-          p,
-        })),
-        { placeHolder: "Remove which profile?" }
-      );
-      if (!pick) return;
-      const { p } = pick;
-      const what = p.kind === "sub" ? "sign out and delete its local data" : "delete its key from the Keychain";
-      const ok = await vscode.window.showWarningMessage(`Remove "${p.name}"? This will ${what}.`, { modal: true }, "Remove");
-      if (!ok) return;
-      if (p.kind === "api") {
-        await deleteKey(p.name);
-        fs.rmSync(apiConfigDir(p.name), { recursive: true, force: true });
-      } else {
-        const bin = findClaudeBinary(vscode.extensions.getExtension("anthropic.claude-code")?.extensionPath);
-        if (bin) await logout(bin, accountDir(p.name));
-        fs.rmSync(accountDir(p.name), { recursive: true, force: true });
-      }
-      const wasActive = activeId() === idOf(p);
-      removeProfile(p);
-      if (wasActive) await applyProfile(ctx, MAX);
-      refresh();
+      const p = await pickProfile("Remove which profile?");
+      if (p) await removeFlow(p);
     })
   );
 }

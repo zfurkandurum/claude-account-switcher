@@ -8,6 +8,7 @@ export interface Profile {
   kind: Kind;
   name: string;
   email?: string;
+  label?: string; // display name; `name` stays the id, folder and Keychain account
 }
 
 interface Store {
@@ -24,6 +25,8 @@ const activeFile = () => path.join(dir(), "active");
 const storeFile = () => path.join(dir(), "profiles.json");
 
 export const idOf = (p: Pick<Profile, "kind" | "name">) => `${p.kind}:${p.name}`;
+
+export const displayName = (p: Pick<Profile, "name" | "label">) => p.label ?? p.name;
 
 // Bare names come from v0.1 and meant API profiles.
 export function parseId(id: string): { kind: "max" } | Profile {
@@ -73,6 +76,22 @@ export function upsertProfile(p: Profile) {
   if (i >= 0) s.profiles[i] = { ...s.profiles[i], ...p };
   else s.profiles.push(p);
   writeStore(s);
+}
+
+// An empty label clears it, so the profile shows its name again.
+export function setLabel(p: Pick<Profile, "kind" | "name">, label?: string) {
+  const s = readStore();
+  const found = s.profiles.find((x) => x.kind === p.kind && x.name === p.name);
+  if (!found) return;
+  if (label) found.label = label;
+  else delete found.label;
+  writeStore(s);
+}
+
+// Profile folders hold symlinks into ~/.claude (settings, history); rmSync unlinks them
+// without following, so shared data survives.
+export function deleteProfileDir(p: Pick<Profile, "kind" | "name">) {
+  fs.rmSync(p.kind === "sub" ? accountDir(p.name) : apiConfigDir(p.name), { recursive: true, force: true });
 }
 
 export function removeProfile(p: Pick<Profile, "kind" | "name">) {

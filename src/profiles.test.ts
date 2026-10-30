@@ -3,6 +3,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import {
+  deleteProfileDir,
+  displayName,
   getActive,
   getLastNonDefault,
   idOf,
@@ -10,6 +12,7 @@ import {
   parseId,
   removeProfile,
   setActive,
+  setLabel,
   upsertProfile,
 } from "./profiles";
 
@@ -63,4 +66,33 @@ test("lastNonDefault tracks switches and survives removal of others", () => {
 
 test("lastNonDefault is undefined with no profiles", () => {
   expect(getLastNonDefault()).toBeUndefined();
+});
+
+test("label is display-only, survives upsert and can be cleared", () => {
+  upsertProfile({ kind: "sub", name: "w" });
+  setLabel({ kind: "sub", name: "w" }, "Work");
+  expect(displayName(listProfiles()[0])).toBe("Work");
+  upsertProfile({ kind: "sub", name: "w", email: "x@y.z" });
+  expect(listProfiles()[0]).toEqual({ kind: "sub", name: "w", email: "x@y.z", label: "Work" });
+  setLabel({ kind: "sub", name: "w" }, "");
+  expect(displayName(listProfiles()[0])).toBe("w");
+  expect(idOf(listProfiles()[0])).toBe("sub:w");
+});
+
+test("setLabel on an unknown profile is a no-op", () => {
+  setLabel({ kind: "api", name: "ghost" }, "x");
+  expect(listProfiles()).toEqual([]);
+});
+
+test("deleteProfileDir unlinks shared symlinks without touching their targets", () => {
+  const shared = path.join(tmp, "shared-projects");
+  fs.mkdirSync(shared);
+  fs.writeFileSync(path.join(shared, "chat.jsonl"), "keep me");
+  const acct = path.join(tmp, "accounts", "w");
+  fs.mkdirSync(acct, { recursive: true });
+  fs.symlinkSync(shared, path.join(acct, "projects"));
+  fs.writeFileSync(path.join(acct, ".claude.json"), "{}");
+  deleteProfileDir({ kind: "sub", name: "w" });
+  expect(fs.existsSync(acct)).toBe(false);
+  expect(fs.readFileSync(path.join(shared, "chat.jsonl"), "utf8")).toBe("keep me");
 });

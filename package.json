@@ -38,6 +38,16 @@
         "category": "Claude Switcher"
       },
       {
+        "command": "claudeSwitcher.updateApiKey",
+        "title": "Update API Key",
+        "category": "Claude Switcher"
+      },
+      {
+        "command": "claudeSwitcher.rename",
+        "title": "Rename Profile",
+        "category": "Claude Switcher"
+      },
+      {
         "command": "claudeSwitcher.relogin",
         "title": "Sign In Again to a Subscription Account",
         "category": "Claude Switcher"
