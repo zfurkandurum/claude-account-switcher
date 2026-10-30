@@ -9,6 +9,8 @@
 #   <name>       legacy (v0.1) form, treated as api:<name>
 DIR="${CLAUDE_SWITCHER_DIR:-$HOME/.claude-switcher}"
 SHARED="settings.json settings.local.json CLAUDE.md skills agents commands plugins ide"
+# Conversation data: shared so a chat started under one profile can be resumed under another.
+HISTORY="projects file-history"
 
 active=""
 [ -f "$DIR/active" ] && active="$(tr -d '\n' < "$DIR/active")"
@@ -18,6 +20,15 @@ link_shared() { # $1 = config dir; share settings/skills/IDE link with ~/.claude
   mkdir -p "$1"
   for f in $SHARED; do
     [ -e "$HOME/.claude/$f" ] && [ ! -e "$1/$f" ] && ln -s "$HOME/.claude/$f" "$1/$f"
+  done
+  for f in $HISTORY; do
+    [ -L "$1/$f" ] && continue
+    mkdir -p "$HOME/.claude/$f"
+    # v0.2 profiles kept their own copy: merge it into ~/.claude (never overwriting), then link.
+    if [ -d "$1/$f" ]; then
+      cp -Rn "$1/$f/." "$HOME/.claude/$f/" 2>/dev/null && rm -rf "${1:?}/$f" || continue
+    fi
+    [ -e "$1/$f" ] || ln -s "$HOME/.claude/$f" "$1/$f"
   done
 }
 

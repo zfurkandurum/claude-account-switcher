@@ -40,6 +40,15 @@ echo "$out" | grep -q "^CLAUDE_CONFIG_DIR=$CLAUDE_SWITCHER_DIR/api-config/work\$
 grep -q 'AAAAAAAAAAAAAAAAAAAA' "$CLAUDE_SWITCHER_DIR/api-config/work/.claude.json"; check "api key last-20 is approved in .claude.json" $?
 [ -L "$CLAUDE_SWITCHER_DIR/api-config/work/settings.json" ] && [ -L "$CLAUDE_SWITCHER_DIR/api-config/work/ide" ]; check "api shares settings.json and ide via symlink" $?
 
+# chat history is shared, and an old per-profile copy is merged, not lost
+setup; echo sub:second > "$CLAUDE_SWITCHER_DIR/active"
+mkdir -p "$CLAUDE_SWITCHER_DIR/accounts/second/projects/-p"; echo old > "$CLAUDE_SWITCHER_DIR/accounts/second/projects/-p/old.jsonl"
+run >/dev/null
+[ -L "$CLAUDE_SWITCHER_DIR/accounts/second/projects" ] && [ -L "$CLAUDE_SWITCHER_DIR/accounts/second/file-history" ]; check "sub shares projects and file-history via symlink" $?
+[ -f "$HOME/.claude/projects/-p/old.jsonl" ]; check "existing per-profile history is merged into ~/.claude" $?
+echo api:work > "$CLAUDE_SWITCHER_DIR/active"; run >/dev/null
+[ "$(readlink "$CLAUDE_SWITCHER_DIR/api-config/work/projects")" = "$HOME/.claude/projects" ]; check "api profile sees the same projects dir" $?
+
 # legacy bare name == api:
 setup; echo work > "$CLAUDE_SWITCHER_DIR/active"; out="$(run)"
 echo "$out" | grep -q '^ANTHROPIC_API_KEY=fake-test-key-'; check "legacy bare name treated as api" $?

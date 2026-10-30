@@ -46,7 +46,7 @@ Claude Code extension ──runs──▶ ~/.claude-switcher/wrapper.sh <claude>
 
 - The extension sets `claudeCode.claudeProcessWrapper` to the wrapper once.
 - Your default login in `~/.claude` is never modified.
-- Subscription and API profiles live in their own config directories, with `settings.json`, `CLAUDE.md`, skills, agents, commands, plugins and the IDE link shared (symlinked) from `~/.claude`. Chat history is kept separately per profile.
+- Subscription and API profiles live in their own config directories, with `settings.json`, `CLAUDE.md`, skills, agents, commands, plugins and the IDE link shared (symlinked) from `~/.claude`. Chat history (`projects/`) is shared too, so after switching you can reopen a previous conversation from the Claude Code history list and continue it with the new account.
 - API keys: Claude Code only uses `ANTHROPIC_API_KEY` when the key's last 20 characters are listed as approved in the config directory's `.claude.json`. The wrapper writes that approval into the profile's own directory.
 
 ## Security
@@ -58,7 +58,7 @@ Keys live only in the Keychain (service `claude-switcher`) and are passed to `se
 - It relies on two behaviours Claude Code does not document as stable: `claudeCode.claudeProcessWrapper` and the `customApiKeyResponses` approval. A Claude Code update could break it; please open an issue.
 - `/status` inside a chat may still mention the default login's account; the reliable check is `apiKeySource` / your console usage for API profiles, and the email shown for subscription accounts.
 - Use accounts and keys you are entitled to use, and follow Anthropic's terms for each.
-- Running chats restart when you switch.
+- Running chats restart when you switch; the conversation is not lost, but you have to reopen it from the history list (a live process cannot change account mid-run).
 
 ## Uninstall
 
